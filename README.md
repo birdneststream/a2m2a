@@ -1,8 +1,8 @@
 # a2m2a - ANSI / mIRC Art Converter
 
-`a2m2a` (ANSI to mIRC Art to ANSI) is a versatile command-line tool written in Go for converting legacy text-based art formats and rendering them as images. It can seamlessly convert between 16-color ANSI art and mIRC art, and can also generate high-quality PNG images from either format.
+`a2m2a` (ANSI to mIRC Art to ANSI) is a versatile command-line tool written in Go for converting legacy text-based art formats and rendering them as images.
 
-Inspired by an original C utility `a2m` by t4t3r, `a2m2a` has been modernized with features like automatic format detection and image rendering capabilities.
+This project was entirely 'vibe-coded' into existence by an LLM in under an hour, using code from the original C utility `a2m` by **t4t3r**. It modernizes the original concept with features like automatic format detection and image rendering capabilities.
 
 ## Features
 
@@ -47,8 +47,8 @@ The tool can be controlled via several command-line flags.
 ### Command-Line Flags
 -   `-i`, `--in`: Path to the input file. If omitted, reads from `stdin`.
 -   `-o`, `--out`: Path to the output file. If omitted, writes to `stdout`.
--   `--png`: Renders the output as a PNG image.
--   `--thumb <width>`: Renders the output as a PNG thumbnail of the specified pixel width.
+-   `--png`: Forces PNG generation. This is not strictly necessary if your output filename ends with `.png`.
+-   `--thumb <width>`: In addition to the main PNG, also generates a thumbnail of the specified pixel width (e.g., `art_thumb.png`).
 -   `-w <width>`: Sets the canvas width for parsing (default: `80`).
 
 ### Examples
@@ -67,29 +67,35 @@ The tool automatically detects if the input is ANSI or mIRC and converts to the 
 
 #### PNG Generation
 
+PNG generation is triggered automatically if the output filename ends with `.png`.
+
 ```bash
 # Generate a PNG from an ANSI file
-./a2m2a -i my_art.ans --png -o my_art.png
+./a2m2a -i my_art.ans -o my_art.png
 
-# Generate a PNG from a mIRC file
-./a2m2a -i my_art.mrc --png -o my_art.png
+# You can also force PNG generation with the --png flag
+./a2m2a -i my_art.mrc --png -o my_art_image
+# (This will create my_art_image.png)
 ```
 
 #### Thumbnail Generation
 
+Using the `--thumb` flag generates the main PNG file *and* a corresponding thumbnail.
+
 ```bash
-# Generate a 320px wide thumbnail from an ANSI file
-./a2m2a -i my_art.ans --thumb 320 -o my_art_thumb.png
+# Generate a full-size PNG and a 320px wide thumbnail
+./a2m2a -i my_art.ans -o my_art.png --thumb 320
+# This command creates two files: my_art.png and my_art_thumb.png
 ```
 
 #### Using with Pipes
 
-The tool fully supports standard I/O.
+The tool fully supports standard I/O. For image generation, you must specify an output file with `-o`.
 
 ```bash
 # Convert from stdin and print ANSI to stdout
 cat my_art.mrc | ./a2m2a
 
-# Generate a PNG from stdin
-cat my_art.ans | ./a2m2a --png > my_art.png
+# Generate a PNG from stdin (requires -o)
+cat my_art.ans | ./a2m2a -o my_art.png
 ``` 

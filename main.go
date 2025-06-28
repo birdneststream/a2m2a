@@ -37,8 +37,6 @@ func main() {
 	flag.Parse()
 
 	var reader io.Reader
-	var writer io.WriteCloser = os.Stdout // Default to stdout
-
 	// --- Input Handling ---
 	if inPath != "" {
 		file, err := os.Open(inPath)
@@ -56,30 +54,12 @@ func main() {
 		reader = bytes.NewReader(stdinData)
 	}
 
-	// --- Auto-Detect Format ---
-	// We need to peek at the first part of the file without consuming the reader.
+	// --- Auto-Detect Format & Parse to Canvas ---
 	buf := new(bytes.Buffer)
-	// TeeReader lets us read while also writing to a buffer
 	tee := io.TeeReader(reader, buf)
 	format := detectFormat(tee)
-	// Now, chain the buffer back to the start of the reader
 	reader = io.MultiReader(buf, reader)
 
-	// --- Output Handling ---
-	if outPath != "" {
-		// Ensure the output file has the correct extension for image generation.
-		if (png || thumb > 0) && !strings.HasSuffix(outPath, ".png") {
-			outPath += ".png"
-		}
-		file, err := os.Create(outPath)
-		if err != nil {
-			log.Fatalf("Error creating output file: %v", err)
-		}
-		defer file.Close()
-		writer = file
-	}
-
-	// --- Conversion Logic ---
 	c := canvas.NewCanvas(width)
 	var outputFormat string
 
@@ -89,32 +69,66 @@ func main() {
 		if err := p.Parse(); err != nil {
 			log.Fatalf("Error parsing ANSI: %v", err)
 		}
-		if !png && thumb == 0 {
-			outputFormat = "mirc"
-		}
+		outputFormat = "mirc"
 	case "mirc":
 		p := mirc.NewParser(c, reader)
 		if err := p.Parse(); err != nil {
 			log.Fatalf("Error parsing mIRC: %v", err)
 		}
-		// If we are generating an image, we don't need to know the text output format.
-		if !png && thumb == 0 {
-			outputFormat = "ansi"
-		}
+		outputFormat = "ansi"
 	default:
 		log.Fatalf("Could not detect file format. Please specify manually.")
 	}
 
 	// --- Output Generation ---
-	if png {
-		if err := renderer.ToPNG(c, writer); err != nil {
+	shouldGeneratePng := png || thumb > 0 || (outPath != "" && strings.HasSuffix(outPath, ".png"))
+	shouldGenerateThumb := thumb > 0
+
+	if shouldGeneratePng {
+		if outPath == "" {
+			log.Fatalf("An output file path must be specified with -o or --out for image generation.")
+		}
+		// Ensure the output file has the correct extension for image generation.
+		if !strings.HasSuffix(outPath, ".png") {
+			outPath += ".png"
+		}
+
+		// Create the main PNG file writer
+		pngFile, err := os.Create(outPath)
+		if err != nil {
+			log.Fatalf("Error creating output file: %v", err)
+		}
+		defer pngFile.Close()
+
+		if err := renderer.ToPNG(c, pngFile); err != nil {
 			log.Fatalf("Error generating PNG: %v", err)
 		}
-	} else if thumb > 0 {
-		if err := renderer.ToThumbnail(c, writer, thumb); err != nil {
-			log.Fatalf("Error generating thumbnail: %v", err)
+		fmt.Printf("Generated PNG: %s\n", outPath)
+
+		if shouldGenerateThumb {
+			thumbPath := constructThumbPath(outPath)
+			thumbFile, err := os.Create(thumbPath)
+			if err != nil {
+				log.Fatalf("Error creating thumbnail file: %v", err)
+			}
+			defer thumbFile.Close()
+			if err := renderer.ToThumbnail(c, thumbFile, thumb); err != nil {
+				log.Fatalf("Error generating thumbnail: %v", err)
+			}
+			fmt.Printf("Generated Thumbnail: %s\n", thumbPath)
 		}
 	} else {
+		// Text output logic
+		var writer io.WriteCloser = os.Stdout
+		if outPath != "" {
+			file, err := os.Create(outPath)
+			if err != nil {
+				log.Fatalf("Error creating output file: %v", err)
+			}
+			defer file.Close()
+			writer = file
+		}
+
 		switch outputFormat {
 		case "ansi":
 			w := ansi.NewWriter(c, writer)
@@ -127,9 +141,18 @@ func main() {
 				log.Fatalf("Error writing mIRC: %v", err)
 			}
 		}
+		if outPath != "" {
+			fmt.Printf("Generated Text File: %s\n", outPath)
+		}
 	}
+}
 
-	fmt.Println("Conversion complete.")
+// constructThumbPath creates a thumbnail filename from an original path.
+// e.g., "art.png" becomes "art_thumb.png"
+func constructThumbPath(originalPath string) string {
+	ext := ".png"
+	base := strings.TrimSuffix(originalPath, ext)
+	return base + "_thumb" + ext
 }
 
 // detectFormat inspects the start of a reader to determine if it's ANSI or mIRC.
