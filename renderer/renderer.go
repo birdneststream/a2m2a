@@ -78,29 +78,40 @@ func renderCanvasToImage(c *canvas.Canvas, parsedFont *truetype.Font, scale floa
 		return image.NewRGBA(image.Rect(0, 0, 1, 1))
 	}
 
+	const baseFontSize = 16.0 // A standard size for getting metrics
 	face := truetype.NewFace(parsedFont, &truetype.Options{
-		Size:    16, // Use a base size
+		Size:    baseFontSize,
 		DPI:     72,
 		Hinting: font.HintingFull,
 	})
 
-	// Calculate character dimensions from font metrics.
-	bounds, advance, _ := face.GlyphBounds('M') // Use 'M' as a representative character
-	charWidth := int(float64(advance) * scale)
-	charHeight := int(float64(bounds.Max.Y-bounds.Min.Y) * scale)
+	// Correctly calculate character dimensions from font metrics.
+	// The font metrics are in 26.6 fixed-point format, so we divide by 64.
+	advance, _ := face.GlyphAdvance('M')
+	fCharWidth := (float64(advance) / 64.0) * scale
+	fCharHeight := (float64(face.Metrics().Ascent+face.Metrics().Descent) / 64.0) * scale
+	baseline := int((float64(face.Metrics().Ascent) / 64.0) * scale)
 
-	imgWidth := (maxCol - minCol + 1) * charWidth
-	imgHeight := (maxRow - minRow + 1) * charHeight
+	numCols := maxCol - minCol + 1
+	numRows := maxRow - minRow + 1
+
+	imgWidth := int(float64(numCols) * fCharWidth)
+	imgHeight := int(float64(numRows) * fCharHeight)
 
 	img := image.NewRGBA(image.Rect(0, 0, imgWidth, imgHeight))
 	draw.Draw(img, img.Bounds(), &image.Uniform{C: color.Black}, image.Point{}, draw.Src)
 
 	// Create a new face for rendering with the scaled size
 	scaledFace := truetype.NewFace(parsedFont, &truetype.Options{
-		Size:    16 * scale,
+		Size:    baseFontSize * scale,
 		DPI:     72,
 		Hinting: font.HintingFull,
 	})
+
+	drawer := &font.Drawer{
+		Dst:  img,
+		Face: scaledFace,
+	}
 
 	for r := minRow; r <= maxRow; r++ {
 		for col := minCol; col <= maxCol; col++ {
@@ -110,6 +121,9 @@ func renderCanvasToImage(c *canvas.Canvas, parsedFont *truetype.Font, scale floa
 			fgIndex := cell.Fg
 			if cell.Bright {
 				fgIndex += 8 // Bright colors are in the upper half of the palette
+			} else if cell.Bold && cell.Fg == 0 {
+				// Special case for bold black, which should be rendered as dark gray.
+				fgIndex += 8
 			}
 			fgColor := ansiColorPalette[fgIndex]
 
@@ -119,22 +133,82 @@ func renderCanvasToImage(c *canvas.Canvas, parsedFont *truetype.Font, scale floa
 			}
 			bgColor := ansiColorPalette[bgIndex]
 
-			// Draw background
-			bgRect := image.Rect(
-				(col-minCol)*charWidth,
-				(r-minRow)*charHeight,
-				(col-minCol+1)*charWidth,
-				(r-minRow+1)*charHeight,
-			)
+			// Calculate the pixel boundaries for the cell.
+			startX := (col - minCol) * imgWidth / numCols
+			startY := (r - minRow) * imgHeight / numRows
+			endX := (col - minCol + 1) * imgWidth / numCols
+			endY := (r - minRow + 1) * imgHeight / numRows
+
+			// Special handling for block-drawing characters to ensure pixel-perfect rendering.
+			switch cell.Char {
+			case '█': // Full block
+				draw.Draw(img, image.Rect(startX, startY, endX, endY), &image.Uniform{C: fgColor}, image.Point{}, draw.Src)
+				continue
+			case '▀': // Upper half block
+				midY := startY + (endY-startY)/2
+				draw.Draw(img, image.Rect(startX, startY, endX, midY), &image.Uniform{C: fgColor}, image.Point{}, draw.Src)
+				draw.Draw(img, image.Rect(startX, midY, endX, endY), &image.Uniform{C: bgColor}, image.Point{}, draw.Src)
+				continue
+			case '▄': // Lower half block
+				midY := startY + (endY-startY)/2
+				draw.Draw(img, image.Rect(startX, startY, endX, midY), &image.Uniform{C: bgColor}, image.Point{}, draw.Src)
+				draw.Draw(img, image.Rect(startX, midY, endX, endY), &image.Uniform{C: fgColor}, image.Point{}, draw.Src)
+				continue
+			case '▌': // Left half block
+				midX := startX + (endX-startX)/2
+				draw.Draw(img, image.Rect(startX, startY, midX, endY), &image.Uniform{C: fgColor}, image.Point{}, draw.Src)
+				draw.Draw(img, image.Rect(midX, startY, endX, endY), &image.Uniform{C: bgColor}, image.Point{}, draw.Src)
+				continue
+			case '▐': // Right half block
+				midX := startX + (endX-startX)/2
+				draw.Draw(img, image.Rect(startX, startY, midX, endY), &image.Uniform{C: bgColor}, image.Point{}, draw.Src)
+				draw.Draw(img, image.Rect(midX, startY, endX, endY), &image.Uniform{C: fgColor}, image.Point{}, draw.Src)
+				continue
+			case '▓': // Dark shade (75%)
+				draw.Draw(img, image.Rect(startX, startY, endX, endY), &image.Uniform{C: bgColor}, image.Point{}, draw.Src)
+				for y := startY; y < endY; y++ {
+					for x := startX; x < endX; x++ {
+						// 3/4 dot pattern
+						if x%2 == 1 || y%2 == 1 {
+							img.Set(x, y, fgColor)
+						}
+					}
+				}
+				continue
+			case '▒': // Medium shade (50%)
+				draw.Draw(img, image.Rect(startX, startY, endX, endY), &image.Uniform{C: bgColor}, image.Point{}, draw.Src)
+				for y := startY; y < endY; y++ {
+					for x := startX; x < endX; x++ {
+						// 50% checkerboard pattern
+						if (x+y)%2 == 0 {
+							img.Set(x, y, fgColor)
+						}
+					}
+				}
+				continue
+			case '░': // Light shade (25%)
+				draw.Draw(img, image.Rect(startX, startY, endX, endY), &image.Uniform{C: bgColor}, image.Point{}, draw.Src)
+				for y := startY; y < endY; y++ {
+					for x := startX; x < endX; x++ {
+						// 1/4 dot pattern
+						if x%2 == 0 && y%2 == 0 {
+							img.Set(x, y, fgColor)
+						}
+					}
+				}
+				continue
+			}
+
+			// Default rendering for all other characters.
+			bgRect := image.Rect(startX, startY, endX, endY)
 			draw.Draw(img, bgRect, &image.Uniform{C: bgColor}, image.Point{}, draw.Src)
 
-			// Draw foreground character
+			// Draw foreground character, skipping spaces.
 			if cell.Char != ' ' {
-				drawer := &font.Drawer{
-					Dst:  img,
-					Src:  &image.Uniform{C: fgColor},
-					Face: scaledFace,
-					Dot:  fixed.Point26_6{X: fixed.I((col - minCol) * charWidth), Y: fixed.I((r-minRow+1)*charHeight - int(float64(scaledFace.Metrics().Descent)))},
+				drawer.Src = &image.Uniform{C: fgColor}
+				drawer.Dot = fixed.Point26_6{
+					X: fixed.I(startX),
+					Y: fixed.I(startY + baseline),
 				}
 				drawer.DrawString(string(cell.Char))
 			}

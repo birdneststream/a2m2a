@@ -2,7 +2,7 @@
 
 `a2m2a` (ANSI to mIRC Art to ANSI) is a versatile command-line tool written in Go for converting legacy text-based art formats and rendering them as images.
 
-This project was entirely 'vibe-coded' into existence by an LLM in under an hour, using code from the original C utility `a2m` by **t4t3r**. It modernizes the original concept with features like automatic format detection and image rendering capabilities.
+This project was entirely 'vibe-coded' into existence by an LLM in under an hour, using code from the original C utility [`a2m` by **t4t3r**](https://github.com/tat3r/a2m). It modernizes the original concept with features like automatic format detection and image rendering capabilities.
 
 ## Features
 
