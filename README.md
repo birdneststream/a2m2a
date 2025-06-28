@@ -9,12 +9,14 @@ This project was entirely 'vibe-coded' into existence by an LLM in under an hour
 -   **Two-Way Text Conversion:**
     -   Convert ANSI art (`.ans`) to mIRC art (`.mrc`).
     -   Convert mIRC art (`.mrc`) to ANSI art (`.ans`).
--   **Automatic Format Detection:** No need to specify the input format; the tool inspects the file and determines the correct conversion path automatically.
 -   **PNG Image Generation:**
     -   Render either ANSI or mIRC art directly to a PNG file.
     -   Creates tightly-cropped images based on the artwork's content.
+-   **99-Color mIRC Support:** Accurately renders mIRC art using the full, non-standard 99-color palette, ensuring PNG outputs are true to the original.
+-   **16-Color Quantization:** Can force any input into the standard 16-color ANSI palette, ensuring compatibility for text-based outputs.
 -   **Thumbnail Generation:**
     -   Create a smaller thumbnail of the artwork with a user-specified width.
+-   **Automatic Format Detection:** No need to specify the input format; the tool inspects the file and determines the correct conversion path automatically.
 -   **CP437 Support:** Correctly handles the CP437 character set, ensuring block graphics and special symbols from classic DOS ANSI art are preserved.
 -   **Flexible I/O:** Reads from and writes to files or standard input/output, allowing it to be easily used in command-line pipelines.
 
@@ -47,9 +49,10 @@ The tool can be controlled via several command-line flags.
 ### Command-Line Flags
 -   `-i`, `--in`: Path to the input file. If omitted, reads from `stdin`.
 -   `-o`, `--out`: Path to the output file. If omitted, writes to `stdout`.
+-   `-w`, `--width`: Sets the canvas width for parsing (default: `80`).
 -   `--png`: Forces PNG generation. This is not strictly necessary if your output filename ends with `.png`.
 -   `--thumb <width>`: In addition to the main PNG, also generates a thumbnail of the specified pixel width (e.g., `art_thumb.png`).
--   `-w <width>`: Sets the canvas width for parsing (default: `80`).
+-   `--16`: Forces the output to be quantized to the 16-color ANSI palette.
 
 ### Examples
 
@@ -67,15 +70,23 @@ The tool automatically detects if the input is ANSI or mIRC and converts to the 
 
 #### PNG Generation
 
-PNG generation is triggered automatically if the output filename ends with `.png`.
+PNG generation is triggered automatically if the output filename ends with `.png`. It fully supports the 99-color mIRC palette.
 
 ```bash
 # Generate a PNG from an ANSI file
 ./a2m2a -i my_art.ans -o my_art.png
 
-# You can also force PNG generation with the --png flag
-./a2m2a -i my_art.mrc --png -o my_art_image
-# (This will create my_art_image.png)
+# Generate a high-fidelity PNG from a 99-color mIRC file
+./a2m2a -i 99_color_art.mrc -o my_art.png
+```
+
+#### Forcing 16-Color Output
+
+You can force the output to the standard 16-color ANSI palette using the `--16` flag. This is particularly useful when converting a 99-color mIRC file into a standard ANSI file.
+
+```bash
+# Convert a 99-color mIRC file to a 16-color ANSI file
+./a2m2a --in 99_color_art.mrc --out 16_color_art.ans --16
 ```
 
 #### Thumbnail Generation

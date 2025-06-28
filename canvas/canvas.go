@@ -1,8 +1,15 @@
 package canvas
 
+import "image/color"
+
+var (
+	// These are standard VGA colors, which are the basis for ANSI color.
+	// We'll use them for defaults.
+	DefaultFg = color.RGBA{R: 0xAA, G: 0xAA, B: 0xAA, A: 0xFF} // Light Grey (ANSI 7)
+	DefaultBg = color.RGBA{R: 0x00, G: 0x00, B: 0x00, A: 0xFF} // Black (ANSI 0)
+)
+
 const (
-	DefaultFg    = 7
-	DefaultBg    = 0
 	DefaultBold  = false
 	DefaultIce   = false
 	DefaultWidth = 80
@@ -17,8 +24,8 @@ type Point struct {
 // Cell represents a single character cell on the canvas.
 type Cell struct {
 	Char   rune
-	Fg     int
-	Bg     int
+	Fg     color.RGBA
+	Bg     color.RGBA
 	Bold   bool // For font weight (SGR 1)
 	Bright bool // For high-intensity colors (SGR 90-97)
 	Ice    bool // For high-intensity backgrounds (iCE Color / SGR 5)
@@ -114,7 +121,7 @@ func (c *Canvas) NewLine() {
 }
 
 // SetCell places a character at the current cursor position and advances the cursor.
-func (c *Canvas) SetCell(char rune, fg, bg int, bold, bright, ice bool) {
+func (c *Canvas) SetCell(char rune, fg, bg color.RGBA, bold, bright, ice bool) {
 	if c.Cursor.Row >= len(c.Grid) {
 		c.addRow()
 	}

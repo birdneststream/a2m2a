@@ -22,6 +22,7 @@ var (
 	width   int
 	png     bool
 	thumb   uint
+	force16 bool
 )
 
 func init() {
@@ -32,6 +33,7 @@ func init() {
 	flag.IntVar(&width, "w", 80, "Width of the canvas")
 	flag.BoolVar(&png, "png", false, "Generate a PNG image")
 	flag.UintVar(&thumb, "thumb", 0, "Generate a thumbnail PNG of the specified width (e.g., --thumb 320)")
+	flag.BoolVar(&force16, "16", false, "Force 16-color output for all formats.")
 }
 
 func main() {
@@ -101,7 +103,7 @@ func main() {
 		outputFormat = "mirc"
 	case "mirc":
 		// mIRC files don't have SAUCE records, so dataSize will be 0.
-		p := mirc.NewParser(c, reader)
+		p := mirc.NewParser(c, reader, force16)
 		if err := p.Parse(); err != nil {
 			log.Fatalf("Error parsing mIRC: %v", err)
 		}

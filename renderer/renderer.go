@@ -14,26 +14,6 @@ import (
 	"golang.org/x/image/math/fixed"
 )
 
-// ansiColorPalette maps the 16 ANSI colors to RGBA values.
-var ansiColorPalette = []color.RGBA{
-	{0, 0, 0, 255},       // 0: Black
-	{170, 0, 0, 255},     // 1: Red
-	{0, 170, 0, 255},     // 2: Green
-	{170, 85, 0, 255},    // 3: Yellow (Brown)
-	{0, 0, 170, 255},     // 4: Blue
-	{170, 0, 170, 255},   // 5: Magenta
-	{0, 170, 170, 255},   // 6: Cyan
-	{170, 170, 170, 255}, // 7: White (Light Gray)
-	{85, 85, 85, 255},    // 8: Bright Black (Dark Gray)
-	{255, 85, 85, 255},   // 9: Bright Red
-	{85, 255, 85, 255},   // 10: Bright Green
-	{255, 255, 85, 255},  // 11: Bright Yellow
-	{85, 85, 255, 255},   // 12: Bright Blue
-	{255, 85, 255, 255},  // 13: Bright Magenta
-	{85, 255, 255, 255},  // 14: Bright Cyan
-	{255, 255, 255, 255}, // 15: Bright White
-}
-
 const (
 	// These are typical dimensions for VGA text mode fonts.
 	charWidth  = 9
@@ -117,27 +97,15 @@ func renderCanvasToImage(c *canvas.Canvas, parsedFont *truetype.Font, scale floa
 		for col := minCol; col <= maxCol; col++ {
 			cell := c.Grid[r][col]
 
-			// Determine foreground and background colors
-			fgIndex := cell.Fg
-			if cell.Bright {
-				fgIndex += 8 // Bright colors are in the upper half of the palette
-			} else if cell.Bold && cell.Fg == 0 {
-				// Special case for bold black, which should be rendered as dark gray.
-				fgIndex += 8
-			}
-			fgColor := ansiColorPalette[fgIndex]
-
-			bgIndex := cell.Bg
-			if cell.Ice {
-				bgIndex += 8 // iCE colors use the bright palette for backgrounds
-			}
-			bgColor := ansiColorPalette[bgIndex]
+			// The canvas cell now stores the final RGBA color, so we use it directly.
+			fgColor := cell.Fg
+			bgColor := cell.Bg
 
 			// Calculate the pixel boundaries for the cell.
-			startX := (col - minCol) * imgWidth / numCols
-			startY := (r - minRow) * imgHeight / numRows
-			endX := (col - minCol + 1) * imgWidth / numCols
-			endY := (r - minRow + 1) * imgHeight / numRows
+			startX := int(float64(col-minCol) * fCharWidth)
+			startY := int(float64(r-minRow) * fCharHeight)
+			endX := int(float64(col-minCol+1) * fCharWidth)
+			endY := int(float64(r-minRow+1) * fCharHeight)
 
 			// Special handling for block-drawing characters to ensure pixel-perfect rendering.
 			switch cell.Char {

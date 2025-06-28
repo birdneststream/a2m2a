@@ -3,7 +3,9 @@ package mirc
 import (
 	"a2m2a/canvas"
 	"fmt"
+	clr "image/color"
 	"io"
+	"math"
 )
 
 // ANSI colors to mIRC color map.
@@ -30,7 +32,8 @@ func NewWriter(c *canvas.Canvas, w io.Writer) *Writer {
 
 // Write generates the mIRC output from the canvas.
 func (w *Writer) Write() error {
-	var prevCell canvas.Cell
+	var prevFg, prevBg clr.RGBA = canvas.DefaultFg, canvas.DefaultBg
+	var prevBold bool
 
 	// Get content bounds to treat the canvas as a fixed-size rectangle.
 	// This ensures that alignment is preserved across all lines.
@@ -40,57 +43,70 @@ func (w *Writer) Write() error {
 		if r > maxRow {
 			break // Don't write trailing empty lines past the content.
 		}
-
-		// At the start of a new line, the 'previous' state is the default.
-		prevCell = canvas.Cell{
-			Fg:     canvas.DefaultFg,
-			Bg:     canvas.DefaultBg,
-			Bold:   canvas.DefaultBold,
-			Bright: false,
-			Ice:    canvas.DefaultIce,
-		}
+		// Reset state for each new line
+		prevFg, prevBg = canvas.DefaultFg, canvas.DefaultBg
+		prevBold = false
 
 		for i := 0; i <= maxCol; i++ {
 			cell := row[i]
 
 			// Handle Bold state change with ^B (0x02)
-			if cell.Bold != prevCell.Bold {
+			if cell.Bold != prevBold {
 				fmt.Fprint(w.writer, "\x02")
+				prevBold = cell.Bold
 			}
 
 			// Handle Color state change with ^C (0x03)
-			if cell.Bright != prevCell.Bright || cell.Fg != prevCell.Fg || cell.Bg != prevCell.Bg || cell.Ice != prevCell.Ice {
-				fmt.Fprintf(w.writer, "\x03")
-				fmt.Fprintf(w.writer, "%d", getFgColor(&cell))
+			if cell.Fg != prevFg || cell.Bg != prevBg {
+				fgIndex, _ := findClosestMircColor(cell.Fg)
+				bgIndex, _ := findClosestMircColor(cell.Bg)
 
-				// We write the BG color if it's not default, or if it has changed from the previous cell's BG.
-				if cell.Bg != canvas.DefaultBg || cell.Bg != prevCell.Bg || cell.Ice != prevCell.Ice {
-					fmt.Fprintf(w.writer, ",%d", getBgColor(&cell))
+				// Always write FG. Only write BG if it's not the default.
+				if bgIndex != 1 { // mIRC default BG is black (index 1)
+					fmt.Fprintf(w.writer, "\x03%d,%d", fgIndex, bgIndex)
+				} else {
+					fmt.Fprintf(w.writer, "\x03%d", fgIndex)
 				}
+				prevFg = cell.Fg
+				prevBg = cell.Bg
 			}
 
 			if _, err := w.writer.Write([]byte(string(cell.Char))); err != nil {
 				return err
 			}
-			prevCell = cell
 		}
+		// mIRC doesn't need ^O to reset, a newline is enough.
 		fmt.Fprint(w.writer, "\n")
 	}
 
 	return nil
 }
 
-func getFgColor(cell *canvas.Cell) int {
-	if cell.Bright {
-		return colorBold[cell.Fg]
-	}
-	return color[cell.Fg]
+// colorDistance calculates the Euclidean distance between two colors.
+func colorDistance(c1, c2 clr.RGBA) float64 {
+	r1, g1, b1, _ := c1.RGBA()
+	r2, g2, b2, _ := c2.RGBA()
+	rd := float64(r1) - float64(r2)
+	gd := float64(g1) - float64(g2)
+	bd := float64(b1) - float64(b2)
+	return math.Sqrt(rd*rd + gd*gd + bd*bd)
 }
 
-func getBgColor(cell *canvas.Cell) int {
-	if cell.Ice {
-		// The C code uses color_bold for iCE backgrounds, let's replicate that.
-		return colorBold[cell.Bg]
+// findClosestMircColor finds the closest color in the 99-color mIRC palette.
+func findClosestMircColor(c clr.RGBA) (int, clr.RGBA) {
+	if c.A == 0 {
+		// Assuming transparent should be the default background color
+		return 1, MircPalette99[1]
 	}
-	return color[cell.Bg]
+	closestIndex := 0
+	minDist := math.MaxFloat64
+
+	for i, mircColor := range MircPalette99 {
+		dist := colorDistance(c, mircColor)
+		if dist < minDist {
+			minDist = dist
+			closestIndex = i
+		}
+	}
+	return closestIndex, MircPalette99[closestIndex]
 }

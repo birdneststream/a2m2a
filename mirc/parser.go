@@ -1,53 +1,37 @@
 package mirc
 
 import (
+	"a2m2a/ansi"
 	"a2m2a/canvas"
 	"bufio"
+	clr "image/color"
 	"io"
 	"strconv"
 	"unicode"
 )
 
-type ansiAttribute struct {
-	index int
-	bold  bool
-}
-
-var mircToAnsi map[int]ansiAttribute
-
-func init() {
-	mircToAnsi = make(map[int]ansiAttribute)
-	// Populate from the writer's color maps
-	for i, mircColor := range color {
-		mircToAnsi[mircColor] = ansiAttribute{index: i, bold: false}
-	}
-	for i, mircColor := range colorBold {
-		// If a color is in both maps (like black/white), bold takes precedence
-		// as it's the more specific case.
-		mircToAnsi[mircColor] = ansiAttribute{index: i, bold: true}
-	}
-}
-
 // Parser holds the state for parsing a mIRC stream.
 type Parser struct {
-	canvas *canvas.Canvas
-	reader *bufio.Reader
+	canvas  *canvas.Canvas
+	reader  *bufio.Reader
+	force16 bool
 	// Current graphic rendition attributes
-	fg   int
-	bg   int
+	fg   clr.RGBA
+	bg   clr.RGBA
 	bold bool
 	ice  bool
 }
 
 // NewParser creates a new mIRC parser.
-func NewParser(c *canvas.Canvas, r io.Reader) *Parser {
+func NewParser(c *canvas.Canvas, r io.Reader, force16 bool) *Parser {
 	return &Parser{
-		canvas: c,
-		reader: bufio.NewReader(r),
-		fg:     canvas.DefaultFg,
-		bg:     canvas.DefaultBg,
-		bold:   canvas.DefaultBold,
-		ice:    canvas.DefaultIce,
+		canvas:  c,
+		reader:  bufio.NewReader(r),
+		force16: force16,
+		fg:      canvas.DefaultFg,
+		bg:      canvas.DefaultBg,
+		bold:    canvas.DefaultBold,
+		ice:     canvas.DefaultIce,
 	}
 }
 
@@ -69,9 +53,17 @@ func (p *Parser) Parse() error {
 				return nil
 			}
 		case '\n':
-			p.canvas.NewLine()
+			// If the cursor is not at the start of a line, we need to add a newline.
+			// If it *is* at the start, it means the canvas auto-wrapped for us,
+			// and we should not add a second newline.
+			if p.canvas.Cursor.Col != 0 {
+				p.canvas.NewLine()
+			}
 		case '\r':
-			p.canvas.Cursor.Col = 0
+			// Treat '\r' as a full newline. If a '\n' follows, the logic
+			// in the '\n' case will correctly prevent a double newline because
+			// the cursor column will already be 0.
+			p.canvas.NewLine()
 		case '\x02': // Bold toggle
 			p.bold = !p.bold
 		case '\x1d': // Italic toggle (unsupported)
@@ -98,14 +90,17 @@ func (p *Parser) handleColorCode() error {
 		}
 		// If there are no digits after \x03, it's a reset code.
 		p.fg, p.bg = canvas.DefaultFg, canvas.DefaultBg
-		p.bold, p.ice = canvas.DefaultBold, canvas.DefaultIce
+		p.bold, p.ice = false, false
 		return nil
 	}
 
-	fgColor, _ := strconv.Atoi(fgStr)
-	if attr, ok := mircToAnsi[fgColor]; ok {
-		p.fg = attr.index
-		p.bold = attr.bold
+	fgColorIdx, _ := strconv.Atoi(fgStr)
+	if fgColorIdx >= 0 && fgColorIdx < len(MircPalette99) {
+		color := MircPalette99[fgColorIdx]
+		if p.force16 {
+			color, _ = ansi.FindClosestAnsiColor(color)
+		}
+		p.fg = color
 	}
 
 	// Check for optional background
@@ -127,11 +122,13 @@ func (p *Parser) handleColorCode() error {
 		return nil
 	}
 
-	bgColor, _ := strconv.Atoi(bgStr)
-	if attr, ok := mircToAnsi[bgColor]; ok {
-		p.bg = attr.index
-		// The "iCE" convention uses bold/bright colors for backgrounds
-		p.ice = attr.bold
+	bgColorIdx, _ := strconv.Atoi(bgStr)
+	if bgColorIdx >= 0 && bgColorIdx < len(MircPalette99) {
+		color := MircPalette99[bgColorIdx]
+		if p.force16 {
+			color, _ = ansi.FindClosestAnsiColor(color)
+		}
+		p.bg = color
 	}
 
 	return nil

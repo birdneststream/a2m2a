@@ -3,6 +3,7 @@ package ansi
 import (
 	"a2m2a/canvas"
 	"bufio"
+	"image/color"
 	"io"
 	"strconv"
 	"strings"
@@ -16,8 +17,8 @@ type Parser struct {
 	reader      *bufio.Reader
 	savedCursor canvas.Point // For DECSC and DECRC
 	// Current graphic rendition attributes
-	fg     int
-	bg     int
+	fg     color.RGBA
+	bg     color.RGBA
 	bold   bool
 	bright bool
 	ice    bool
@@ -62,7 +63,9 @@ func (p *Parser) Parse() error {
 				return err
 			}
 		case '\n':
-			p.canvas.NewLine()
+			if p.canvas.Cursor.Col != 0 {
+				p.canvas.NewLine()
+			}
 		case '\r':
 			p.canvas.Cursor.Col = 0
 		case '\t':
@@ -158,19 +161,19 @@ func (p *Parser) executeCommand(cmd rune, params []int) {
 			case param == 25:
 				p.ice = false
 			case param >= 30 && param <= 37:
-				p.fg = param - 30
+				p.fg = AnsiPalette[param-30]
 				p.bright = false // Standard colors are not bright
 			case param == 39:
 				p.fg = canvas.DefaultFg
 			case param >= 40 && param <= 47:
-				p.bg = param - 40
+				p.bg = AnsiPalette[param-40]
 			case param == 49:
 				p.bg = canvas.DefaultBg
 			case param >= 90 && param <= 97: // high intensity foreground
-				p.fg = param - 90
+				p.fg = AnsiPalette[param-90+8]
 				p.bright = true
 			case param >= 100 && param <= 107: // high intensity background
-				p.bg = param - 100
+				p.bg = AnsiPalette[param-100+8]
 				p.ice = true
 			}
 		}
