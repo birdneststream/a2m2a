@@ -5,6 +5,7 @@ import (
 	"a2m2a/canvas"
 	"a2m2a/mirc"
 	"a2m2a/renderer"
+	"a2m2a/sauce"
 	"bytes"
 	"flag"
 	"fmt"
@@ -37,14 +38,24 @@ func main() {
 	flag.Parse()
 
 	var reader io.Reader
+	var file *os.File
+	var err error
+	var sauceRecord *sauce.Record
+
 	// --- Input Handling ---
 	if inPath != "" {
-		file, err := os.Open(inPath)
+		file, err = os.Open(inPath)
 		if err != nil {
 			log.Fatalf("Error opening input file: %v", err)
 		}
 		defer file.Close()
 		reader = file
+
+		// Try to get a SAUCE record.
+		sauceRecord, _ = sauce.Get(file)
+		// Reset the file reader to the beginning after SAUCE check.
+		_, _ = file.Seek(0, io.SeekStart)
+
 	} else {
 		// Read from stdin if no input file is specified
 		stdinData, err := io.ReadAll(os.Stdin)
@@ -52,6 +63,24 @@ func main() {
 			log.Fatalf("Error reading from stdin: %v", err)
 		}
 		reader = bytes.NewReader(stdinData)
+		// Note: SAUCE parsing from stdin is not supported.
+	}
+
+	// Override canvas width if specified in SAUCE record and not by user flag.
+	usedWidth := width
+	var dataSize int64
+	if sauceRecord != nil {
+		// The `width` flag has a default value, so we need to check if it was explicitly set.
+		widthFlagSet := false
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name == "w" {
+				widthFlagSet = true
+			}
+		})
+		if sauceRecord.TInfo1 > 0 && !widthFlagSet {
+			usedWidth = int(sauceRecord.TInfo1)
+		}
+		dataSize = int64(sauceRecord.FileSize)
 	}
 
 	// --- Auto-Detect Format & Parse to Canvas ---
@@ -60,17 +89,18 @@ func main() {
 	format := detectFormat(tee)
 	reader = io.MultiReader(buf, reader)
 
-	c := canvas.NewCanvas(width)
+	c := canvas.NewCanvas(usedWidth)
 	var outputFormat string
 
 	switch format {
 	case "ansi":
-		p := ansi.NewParser(c, reader)
+		p := ansi.NewParser(c, reader, dataSize)
 		if err := p.Parse(); err != nil {
 			log.Fatalf("Error parsing ANSI: %v", err)
 		}
 		outputFormat = "mirc"
 	case "mirc":
+		// mIRC files don't have SAUCE records, so dataSize will be 0.
 		p := mirc.NewParser(c, reader)
 		if err := p.Parse(); err != nil {
 			log.Fatalf("Error parsing mIRC: %v", err)
@@ -89,31 +119,33 @@ func main() {
 			log.Fatalf("An output file path must be specified with -o or --out for image generation.")
 		}
 		// Ensure the output file has the correct extension for image generation.
-		if !strings.HasSuffix(outPath, ".png") {
+		if !strings.HasSuffix(outPath, ".png") && !shouldGenerateThumb {
+			// If we're only generating a text file, but the output has a .png extension,
+			// it implies image generation. If neither --png nor --thumb is specified,
+			// we add the extension. If they are, we assume the user's intent is clear.
 			outPath += ".png"
 		}
 
-		// Create the main PNG file writer
-		pngFile, err := os.Create(outPath)
-		if err != nil {
-			log.Fatalf("Error creating output file: %v", err)
+		// Generate the main PNG if required
+		if png || !shouldGenerateThumb { // Generate main PNG if --png is set or if it's the default action
+			pngData, err := renderer.ToPNG(c)
+			if err != nil {
+				log.Fatalf("Error generating PNG: %v", err)
+			}
+			if err := os.WriteFile(outPath, pngData, 0644); err != nil {
+				log.Fatalf("Error writing PNG file: %v", err)
+			}
+			fmt.Printf("Generated PNG: %s\n", outPath)
 		}
-		defer pngFile.Close()
-
-		if err := renderer.ToPNG(c, pngFile); err != nil {
-			log.Fatalf("Error generating PNG: %v", err)
-		}
-		fmt.Printf("Generated PNG: %s\n", outPath)
 
 		if shouldGenerateThumb {
 			thumbPath := constructThumbPath(outPath)
-			thumbFile, err := os.Create(thumbPath)
+			thumbData, err := renderer.ToThumbnail(c)
 			if err != nil {
-				log.Fatalf("Error creating thumbnail file: %v", err)
-			}
-			defer thumbFile.Close()
-			if err := renderer.ToThumbnail(c, thumbFile, thumb); err != nil {
 				log.Fatalf("Error generating thumbnail: %v", err)
+			}
+			if err := os.WriteFile(thumbPath, thumbData, 0644); err != nil {
+				log.Fatalf("Error writing thumbnail file: %v", err)
 			}
 			fmt.Printf("Generated Thumbnail: %s\n", thumbPath)
 		}

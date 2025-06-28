@@ -23,38 +23,30 @@ func NewWriter(c *canvas.Canvas, w io.Writer) *Writer {
 
 // Write generates the ANSI output from the canvas.
 func (w *Writer) Write() error {
-	// To begin, reset all attributes
-	if _, err := fmt.Fprint(w.writer, "\x1b[0m"); err != nil {
-		return err
-	}
-	// Move cursor to top-left
-	if _, err := fmt.Fprint(w.writer, "\x1b[H"); err != nil {
-		return err
+	var prevCell canvas.Cell
+	// Initialize prevCell to defaults so the first cell is always rendered.
+	prevCell = canvas.Cell{
+		Fg:     canvas.DefaultFg,
+		Bg:     canvas.DefaultBg,
+		Bold:   canvas.DefaultBold,
+		Bright: false,
+		Ice:    canvas.DefaultIce,
 	}
 
-	for _, row := range w.canvas.Grid {
-		// At the start of each line, the previous cell state should be reset to default,
-		// because the prior line ended with a reset code.
-		var prevCell canvas.Cell
-		prevCell = canvas.Cell{
-			Fg:   canvas.DefaultFg,
-			Bg:   canvas.DefaultBg,
-			Bold: canvas.DefaultBold,
-			Ice:  canvas.DefaultIce,
-		}
+	// Get content bounds to avoid writing trailing spaces for the entire canvas width
+	_, maxRow, _, _ := w.canvas.GetContentBounds()
 
-		// Find the last meaningful character in the row to trim trailing space.
+	for r := 0; r <= maxRow; r++ {
+		row := w.canvas.Grid[r]
+		// Find the last non-space character to trim trailing spaces.
 		lastCharIndex := -1
 		for i := len(row) - 1; i >= 0; i-- {
-			cell := row[i]
-			// A cell is meaningful if it's not a space with a default background.
-			if cell.Char != ' ' || cell.Bg != canvas.DefaultBg {
+			if row[i].Char != ' ' || row[i].Bg != canvas.DefaultBg {
 				lastCharIndex = i
 				break
 			}
 		}
 
-		// If the line is empty (all default spaces), just print a newline.
 		if lastCharIndex == -1 {
 			fmt.Fprint(w.writer, "\n")
 			continue
@@ -62,44 +54,40 @@ func (w *Writer) Write() error {
 
 		for i := 0; i <= lastCharIndex; i++ {
 			cell := row[i]
-			if cell.Fg != prevCell.Fg || cell.Bg != prevCell.Bg || cell.Bold != prevCell.Bold || cell.Ice != prevCell.Ice {
-				params := []string{}
-
-				// A single SGR sequence can set multiple attributes.
-				// We build a list of parameters and join them.
-				// Example: \x1b[1;31;44m for bold, red fg, blue bg.
-
-				// It's most reliable to reset and set all attributes for the cell.
+			if cell != prevCell {
+				var params []string
+				// Reset is code 0, which also conveniently resets bold/ice.
 				params = append(params, "0")
 
-				fgCode := cell.Fg + 30
+				// Set bold if needed. Brightness is handled by the color code.
 				if cell.Bold {
-					fgCode = cell.Fg + 90
+					params = append(params, "1")
 				}
-				params = append(params, fmt.Sprintf("%d", fgCode))
 
-				bgCode := cell.Bg + 40
-				if cell.Ice {
-					bgCode = cell.Bg + 100
+				if cell.Bright {
+					params = append(params, fmt.Sprintf("%d", cell.Fg+90))
+				} else {
+					params = append(params, fmt.Sprintf("%d", cell.Fg+30))
 				}
-				// We only need to specify the background if it's not the default.
-				if bgCode != 40 {
-					params = append(params, fmt.Sprintf("%d", bgCode))
+
+				// The original C code used blink (5) for iCE colors.
+				if cell.Ice {
+					params = append(params, "5")
+					params = append(params, fmt.Sprintf("%d", cell.Bg+100))
+				} else {
+					params = append(params, fmt.Sprintf("%d", cell.Bg+40))
 				}
 
 				fmt.Fprintf(w.writer, "\x1b[%sm", strings.Join(params, ";"))
 			}
-
 			if _, err := w.writer.Write([]byte(string(cell.Char))); err != nil {
 				return err
 			}
 			prevCell = cell
 		}
-		// At the end of a row, reset attributes and print a newline for safety.
+		// Reset attributes at the end of the line.
 		fmt.Fprint(w.writer, "\x1b[0m\n")
 	}
 
-	// Reset attributes at the very end.
-	fmt.Fprint(w.writer, "\x1b[0m")
 	return nil
 }

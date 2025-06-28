@@ -22,3 +22,8 @@ go.work.sum
 # OS-specific files
 .DS_Store
 Thumbs.db 
+
+*.txt
+*.png
+*.DIZ
+*.ans

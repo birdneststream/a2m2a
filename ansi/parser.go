@@ -4,32 +4,44 @@ import (
 	"a2m2a/canvas"
 	"bufio"
 	"io"
+	"strconv"
+	"strings"
 
 	"golang.org/x/text/encoding/charmap"
 )
 
 // Parser holds the state for parsing an ANSI stream.
 type Parser struct {
-	canvas *canvas.Canvas
-	reader *bufio.Reader
+	canvas      *canvas.Canvas
+	reader      *bufio.Reader
+	savedCursor canvas.Point // For DECSC and DECRC
 	// Current graphic rendition attributes
-	fg   int
-	bg   int
-	bold bool
-	ice  bool
+	fg     int
+	bg     int
+	bold   bool
+	bright bool
+	ice    bool
 }
 
 // NewParser creates a new ANSI parser.
-func NewParser(c *canvas.Canvas, r io.Reader) *Parser {
+func NewParser(c *canvas.Canvas, r io.Reader, dataSize int64) *Parser {
+	var limitedReader io.Reader
+	if dataSize > 0 {
+		limitedReader = io.LimitReader(r, dataSize)
+	} else {
+		limitedReader = r
+	}
 	// The input stream is decoded from CP437 to UTF-8.
-	decodedReader := charmap.CodePage437.NewDecoder().Reader(r)
+	decodedReader := charmap.CodePage437.NewDecoder().Reader(limitedReader)
 	return &Parser{
-		canvas: c,
-		reader: bufio.NewReader(decodedReader),
-		fg:     canvas.DefaultFg,
-		bg:     canvas.DefaultBg,
-		bold:   canvas.DefaultBold,
-		ice:    canvas.DefaultIce,
+		canvas:      c,
+		reader:      bufio.NewReader(decodedReader),
+		savedCursor: canvas.Point{Row: 0, Col: 0},
+		fg:          canvas.DefaultFg,
+		bg:          canvas.DefaultBg,
+		bold:        canvas.DefaultBold,
+		bright:      false,
+		ice:         canvas.DefaultIce,
 	}
 }
 
@@ -45,15 +57,9 @@ func (p *Parser) Parse() error {
 		}
 
 		switch r {
-		case '\x1b': // ESC
+		case '\x1b': // Escape character
 			if err := p.handleEscape(); err != nil {
-				if err == io.EOF {
-					return nil
-				}
-				// It's common for ANSI art to have truncated escape codes.
-				// We can log this as a warning instead of returning an error.
-				// For now, we'll just stop parsing.
-				return nil
+				return err
 			}
 		case '\n':
 			p.canvas.NewLine()
@@ -63,12 +69,12 @@ func (p *Parser) Parse() error {
 			// In the C code, tab size is configurable. We'll hardcode 8 for now.
 			const tabSize = 8
 			for i := 0; i < tabSize; i++ {
-				p.canvas.SetCell(' ', p.fg, p.bg, p.bold, p.ice)
+				p.canvas.SetCell(' ', p.fg, p.bg, p.bold, p.bright, p.ice)
 			}
-		case '\x1a': // SAUCE terminator
+		case '\x1a': // SAUCE separator. Should be handled by LimitReader now, but we keep this for safety.
 			return nil
 		default:
-			p.canvas.SetCell(r, p.fg, p.bg, p.bold, p.ice)
+			p.canvas.SetCell(r, p.fg, p.bg, p.bold, p.bright, p.ice)
 		}
 	}
 }
@@ -79,16 +85,18 @@ func (p *Parser) handleEscape() error {
 		return err
 	}
 
-	if r != '[' {
-		// Not a CSI sequence, ignore for now.
-		return nil
+	if r == '[' { // This is a Control Sequence Introducer (CSI)
+		return p.handleCSI()
 	}
 
-	// This is a Control Sequence Introducer (CSI)
-	// It has the form: \x1b[<params>...<command>
-	params := make([]int, 0, 16)
-	currentParam := 0
-	inParam := false
+	// Other escape sequences are not supported for now.
+	return nil
+}
+
+func (p *Parser) handleCSI() error {
+	var params []int
+	var currentParam strings.Builder
+	var cmd rune
 
 	for {
 		r, _, err := p.reader.ReadRune()
@@ -97,28 +105,26 @@ func (p *Parser) handleEscape() error {
 		}
 
 		if r >= '0' && r <= '9' {
-			if !inParam {
-				inParam = true
+			currentParam.WriteRune(r)
+		} else {
+			if currentParam.Len() > 0 {
+				val, _ := strconv.Atoi(currentParam.String())
+				params = append(params, val)
+				currentParam.Reset()
 			}
-			currentParam = (currentParam * 10) + int(r-'0')
-			continue
+			if r == ';' {
+				if len(params) == 0 {
+					params = append(params, 0)
+				}
+				continue
+			}
+			cmd = r
+			break
 		}
-
-		// Delimiter or command
-		if inParam {
-			params = append(params, currentParam)
-			currentParam = 0
-			inParam = false
-		}
-
-		if r == ';' {
-			continue
-		}
-
-		// This is a command rune
-		p.executeCommand(r, params)
-		return nil
 	}
+
+	p.executeCommand(cmd, params)
+	return nil
 }
 
 func (p *Parser) executeCommand(cmd rune, params []int) {
@@ -132,15 +138,15 @@ func (p *Parser) executeCommand(cmd rune, params []int) {
 	switch cmd {
 	case 'm': // Select Graphic Rendition (SGR)
 		if len(params) == 0 {
-			params = []int{0} // Reset
+			params = []int{0} // Treat `[m` as `[0m`
 		}
-		for i := 0; i < len(params); i++ {
-			param := params[i]
+		for _, param := range params {
 			switch {
 			case param == 0: // Reset
 				p.fg = canvas.DefaultFg
 				p.bg = canvas.DefaultBg
 				p.bold = canvas.DefaultBold
+				p.bright = false
 				p.ice = canvas.DefaultIce
 			case param == 1:
 				p.bold = true
@@ -148,10 +154,12 @@ func (p *Parser) executeCommand(cmd rune, params []int) {
 				p.ice = true
 			case param == 22:
 				p.bold = false
+				p.bright = false
 			case param == 25:
 				p.ice = false
 			case param >= 30 && param <= 37:
 				p.fg = param - 30
+				p.bright = false // Standard colors are not bright
 			case param == 39:
 				p.fg = canvas.DefaultFg
 			case param >= 40 && param <= 47:
@@ -160,7 +168,7 @@ func (p *Parser) executeCommand(cmd rune, params []int) {
 				p.bg = canvas.DefaultBg
 			case param >= 90 && param <= 97: // high intensity foreground
 				p.fg = param - 90
-				p.bold = true
+				p.bright = true
 			case param >= 100 && param <= 107: // high intensity background
 				p.bg = param - 100
 				p.ice = true
@@ -169,26 +177,31 @@ func (p *Parser) executeCommand(cmd rune, params []int) {
 	case 'H', 'f': // Cursor Position
 		row := getParam(0, 1)
 		col := getParam(1, 1)
-		p.canvas.MoveTo(row, col)
+		p.canvas.SetCursor(row-1, col-1) // ANSI is 1-based
 	case 'A': // Cursor Up
 		p.canvas.MoveUp(getParam(0, 1))
 	case 'B': // Cursor Down
 		p.canvas.MoveDown(getParam(0, 1))
 	case 'C': // Cursor Forward
 		p.canvas.MoveForward(getParam(0, 1))
-	case 'D': // Cursor Back
+	case 'D': // Cursor Backward
 		p.canvas.MoveBackward(getParam(0, 1))
 	case 'J': // Erase in Display
-		// 2J clears the entire screen
-		if getParam(0, 0) == 2 {
-			p.canvas.ClearScreen()
+		mode := getParam(0, 0)
+		switch mode {
+		case 2: // Erase entire screen and move cursor to home
+			p.canvas.Clear(canvas.Cell{
+				Char:   ' ',
+				Fg:     p.fg,
+				Bg:     p.bg,
+				Bold:   p.bold,
+				Bright: p.bright,
+				Ice:    p.ice,
+			})
 		}
-		// Other J commands are not implemented for simplicity
-	case 'K': // Erase in Line
-		// Not implemented for simplicity
-	case 's': // Save Cursor Position
-		p.canvas.SaveCursor()
-	case 'u': // Restore Cursor Position
-		p.canvas.RestoreCursor()
+	case 's': // Save Cursor Position (SCOSC/DECSC)
+		p.savedCursor = p.canvas.Cursor
+	case 'u': // Restore Cursor Position (SCORC/DECRC)
+		p.canvas.Cursor = p.savedCursor
 	}
 }

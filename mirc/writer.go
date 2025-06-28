@@ -32,42 +32,37 @@ func NewWriter(c *canvas.Canvas, w io.Writer) *Writer {
 func (w *Writer) Write() error {
 	var prevCell canvas.Cell
 
-	for _, row := range w.canvas.Grid {
-		// Find the last meaningful character in the row to trim trailing space.
-		lastCharIndex := -1
-		for i := len(row) - 1; i >= 0; i-- {
-			cell := row[i]
-			if cell.Char != ' ' || cell.Bg != canvas.DefaultBg {
-				lastCharIndex = i
-				break
-			}
-		}
+	// Get content bounds to treat the canvas as a fixed-size rectangle.
+	// This ensures that alignment is preserved across all lines.
+	_, maxRow, _, maxCol := w.canvas.GetContentBounds()
 
-		// If the line is empty, we don't write anything, not even a newline,
-		// unless we want to preserve blank lines. For now, we'll skip them
-		// to create the most compact output. If we print just "\n", some
-		// clients interpret that as a color reset.
-		if lastCharIndex == -1 {
-			continue
+	for r, row := range w.canvas.Grid {
+		if r > maxRow {
+			break // Don't write trailing empty lines past the content.
 		}
 
 		// At the start of a new line, the 'previous' state is the default.
 		prevCell = canvas.Cell{
-			Fg:   canvas.DefaultFg,
-			Bg:   canvas.DefaultBg,
-			Bold: canvas.DefaultBold,
-			Ice:  canvas.DefaultIce,
+			Fg:     canvas.DefaultFg,
+			Bg:     canvas.DefaultBg,
+			Bold:   canvas.DefaultBold,
+			Bright: false,
+			Ice:    canvas.DefaultIce,
 		}
 
-		for i := 0; i <= lastCharIndex; i++ {
+		for i := 0; i <= maxCol; i++ {
 			cell := row[i]
-			if cell.Fg != prevCell.Fg || cell.Bg != prevCell.Bg || cell.Bold != prevCell.Bold || cell.Ice != prevCell.Ice {
+
+			// Handle Bold state change with ^B (0x02)
+			if cell.Bold != prevCell.Bold {
+				fmt.Fprint(w.writer, "\x02")
+			}
+
+			// Handle Color state change with ^C (0x03)
+			if cell.Bright != prevCell.Bright || cell.Fg != prevCell.Fg || cell.Bg != prevCell.Bg || cell.Ice != prevCell.Ice {
 				fmt.Fprintf(w.writer, "\x03")
 				fmt.Fprintf(w.writer, "%d", getFgColor(&cell))
 
-				// The mIRC spec says to include the background color to change it.
-				// If the previous char had a background and this one doesn't, we must explicitly set the default.
-				// This logic is more robust than the original C code's for client compatibility.
 				// We write the BG color if it's not default, or if it has changed from the previous cell's BG.
 				if cell.Bg != canvas.DefaultBg || cell.Bg != prevCell.Bg || cell.Ice != prevCell.Ice {
 					fmt.Fprintf(w.writer, ",%d", getBgColor(&cell))
@@ -79,17 +74,14 @@ func (w *Writer) Write() error {
 			}
 			prevCell = cell
 		}
-
-		if _, err := w.writer.Write([]byte("\n")); err != nil {
-			return err
-		}
+		fmt.Fprint(w.writer, "\n")
 	}
 
 	return nil
 }
 
 func getFgColor(cell *canvas.Cell) int {
-	if cell.Bold {
+	if cell.Bright {
 		return colorBold[cell.Fg]
 	}
 	return color[cell.Fg]

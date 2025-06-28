@@ -1,15 +1,15 @@
 package renderer
 
 import (
-	"a2m2a/canvas"
+	"bytes"
 	"image"
 	"image/color"
 	"image/draw"
 	"image/png"
-	"io"
+
+	"a2m2a/canvas"
 
 	"github.com/golang/freetype/truetype"
-	"github.com/nfnt/resize"
 	"golang.org/x/image/font"
 	"golang.org/x/image/math/fixed"
 )
@@ -42,54 +42,82 @@ const (
 )
 
 // ToPNG renders a canvas to a PNG image.
-func ToPNG(c *canvas.Canvas, w io.Writer) error {
-	img, err := renderCanvasToImage(c)
-	if err != nil {
-		return err
-	}
-	return png.Encode(w, img)
-}
-
-// ToThumbnail generates a thumbnail PNG image.
-func ToThumbnail(c *canvas.Canvas, w io.Writer, width uint) error {
-	img, err := renderCanvasToImage(c)
-	if err != nil {
-		return err
-	}
-	thumb := resize.Resize(width, 0, img, resize.Lanczos3)
-	return png.Encode(w, thumb)
-}
-
-// renderCanvasToImage performs the actual drawing of the canvas to an image.
-func renderCanvasToImage(c *canvas.Canvas) (image.Image, error) {
+func ToPNG(c *canvas.Canvas) ([]byte, error) {
 	parsedFont, err := truetype.Parse(FontData)
 	if err != nil {
 		return nil, err
 	}
+	img := renderCanvasToImage(c, parsedFont, 1.0)
+	buf := new(bytes.Buffer)
+	if err := png.Encode(buf, img); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// ToThumbnail generates a small PNG thumbnail from the canvas.
+func ToThumbnail(c *canvas.Canvas) ([]byte, error) {
+	parsedFont, err := truetype.Parse(FontData)
+	if err != nil {
+		return nil, err
+	}
+	// Use a smaller scale for the thumbnail. 0.5 means half the size.
+	img := renderCanvasToImage(c, parsedFont, 0.5)
+	buf := new(bytes.Buffer)
+	if err := png.Encode(buf, img); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// renderCanvasToImage performs the actual drawing of the canvas to an image.
+func renderCanvasToImage(c *canvas.Canvas, parsedFont *truetype.Font, scale float64) image.Image {
+	// Determine the actual bounds of the art to create a tightly-cropped image.
+	minRow, maxRow, minCol, maxCol := c.GetContentBounds()
+	if minRow > maxRow { // Empty canvas
+		return image.NewRGBA(image.Rect(0, 0, 1, 1))
+	}
+
 	face := truetype.NewFace(parsedFont, &truetype.Options{
-		Size:    fontSize,
+		Size:    16, // Use a base size
 		DPI:     72,
 		Hinting: font.HintingFull,
 	})
 
-	// Determine the actual bounds of the art to create a tightly-cropped image.
-	minRow, maxRow, minCol, maxCol := c.GetContentBounds()
+	// Calculate character dimensions from font metrics.
+	bounds, advance, _ := face.GlyphBounds('M') // Use 'M' as a representative character
+	charWidth := int(float64(advance) * scale)
+	charHeight := int(float64(bounds.Max.Y-bounds.Min.Y) * scale)
+
 	imgWidth := (maxCol - minCol + 1) * charWidth
 	imgHeight := (maxRow - minRow + 1) * charHeight
 
 	img := image.NewRGBA(image.Rect(0, 0, imgWidth, imgHeight))
 	draw.Draw(img, img.Bounds(), &image.Uniform{C: color.Black}, image.Point{}, draw.Src)
 
-	drawer := &font.Drawer{
-		Dst:  img,
-		Face: face,
-	}
+	// Create a new face for rendering with the scaled size
+	scaledFace := truetype.NewFace(parsedFont, &truetype.Options{
+		Size:    16 * scale,
+		DPI:     72,
+		Hinting: font.HintingFull,
+	})
 
 	for r := minRow; r <= maxRow; r++ {
 		for col := minCol; col <= maxCol; col++ {
 			cell := c.Grid[r][col]
-			bgColor := ansiColorPalette[cell.Bg]
-			fgColor := ansiColorPalette[cell.Fg]
+
+			// Determine foreground and background colors
+			fgIndex := cell.Fg
+			if cell.Bright {
+				fgIndex += 8 // Bright colors are in the upper half of the palette
+			}
+			fgColor := ansiColorPalette[fgIndex]
+
+			bgIndex := cell.Bg
+			if cell.Ice {
+				bgIndex += 8 // iCE colors use the bright palette for backgrounds
+			}
+			bgColor := ansiColorPalette[bgIndex]
 
 			// Draw background
 			bgRect := image.Rect(
@@ -101,14 +129,17 @@ func renderCanvasToImage(c *canvas.Canvas) (image.Image, error) {
 			draw.Draw(img, bgRect, &image.Uniform{C: bgColor}, image.Point{}, draw.Src)
 
 			// Draw foreground character
-			drawer.Src = &image.Uniform{C: fgColor}
-			drawer.Dot = fixed.Point26_6{
-				X: fixed.I((col - minCol) * charWidth),
-				Y: fixed.I((r-minRow+1)*charHeight - 4), // Baseline adjustment
+			if cell.Char != ' ' {
+				drawer := &font.Drawer{
+					Dst:  img,
+					Src:  &image.Uniform{C: fgColor},
+					Face: scaledFace,
+					Dot:  fixed.Point26_6{X: fixed.I((col - minCol) * charWidth), Y: fixed.I((r-minRow+1)*charHeight - int(float64(scaledFace.Metrics().Descent)))},
+				}
+				drawer.DrawString(string(cell.Char))
 			}
-			drawer.DrawString(string(cell.Char))
 		}
 	}
 
-	return img, nil
+	return img
 }

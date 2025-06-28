@@ -72,8 +72,14 @@ func (p *Parser) Parse() error {
 			p.canvas.NewLine()
 		case '\r':
 			p.canvas.Cursor.Col = 0
+		case '\x02': // Bold toggle
+			p.bold = !p.bold
+		case '\x1d': // Italic toggle (unsupported)
+			continue
+		case '\x1f': // Underline toggle (unsupported)
+			continue
 		default:
-			p.canvas.SetCell(r, p.fg, p.bg, p.bold, p.ice)
+			p.canvas.SetCell(r, p.fg, p.bg, p.bold, false, p.ice)
 		}
 	}
 }
